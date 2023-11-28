@@ -7,7 +7,7 @@ Only functions 1 to 7 are available.
 ## Installation
 
 ```bash
-pip install 'cec_2011_rw @ git+https://github.com/Kaeryv/cec_2011_real_world_cases'
+pip install 'rwoc @ git+https://github.com/Kaeryv/real-world-optimization-cases'
 ```
 
 ## Usage
