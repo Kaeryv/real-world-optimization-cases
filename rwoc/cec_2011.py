@@ -1,6 +1,8 @@
 import numpy as np
 from math import sin, cos, exp, pi, floor
 from scipy.io import loadmat
+from numba import njit
+from .antenna import antennafunccircular
 
 def function_selector(x, num=1):
     return globals()[f"rw{num}"](x)
@@ -30,17 +32,25 @@ def get_boundaries(num):
         bnds = np.zeros((2, 20))
         bnds[0, :] = 0
         bnds[1, :] = 2*pi
+    
+    elif num == 10:
+        bnds = np.zeros((2, 12))
+        bnds[0, 0:6] = 0.2
+        bnds[1, 0:6] = 1.0
+        bnds[0, 6:] = -180
+        bnds[1, 6:] = 180
         
 
     else:
         print("Unsupported problem.")
 
     return bnds
-
+c = loadmat('c_bifunc_data.mat')["c"]  # Assuming the data file is in the same directory
+@njit
 def diffsolv(x, t, u):
-    c = loadmat('c_bifunc_data.mat')["c"]  # Assuming the data file is in the same directory
     ml = np.array([1, u[0], u[0]**2, u[0]**3])
-    mlt = np.tile(ml, (10, 1))
+    mlt = ml.repeat(10).reshape(4, -1).T
+    #mlt = np.tile(ml, (10, 1))
     k = np.sum(c * mlt, axis=1)
 
     dy = np.zeros(7)
@@ -54,13 +64,19 @@ def diffsolv(x, t, u):
 
     return dy
 
-
-def intgrl(x, t, u):
-    dy = np.zeros(2)
-    dy[0] = -(2 + u) * (x[0] + 0.25) + (x[1] + 0.5) * exp(25 * x[0] / (x[0] + 2))
-    dy[1] = 0.5 - x[1] - (x[1] + 0.5) * exp(25 * x[0] / (x[0] + 2))
+@njit
+def intgrl(t, x, u):
+    a = 25 * x[0] / (x[0] + 2)
+    if a <= 10000:
+        a = exp(a)
+    else:
+        a = np.inf
+    dy = np.zeros((2))
+    dy[0] = - (2 + u[0]) * (x[0] + 0.25) + (x[1] + 0.5) * a
+    dy[1] = 0.5 - x[1] - (x[1] + 0.5) * a
     return dy
 
+@njit
 def rw1(x):
     '''
         FM Sound wave
@@ -80,7 +96,7 @@ def rw1(x):
 
     return f
 
-
+@njit
 def rw2(x):
     '''
         Lennard Jones potential
@@ -103,7 +119,6 @@ def rw2(x):
     return v
 
 from scipy.integrate import odeint
-
 def rw3(x):
     '''
         BiF Catalyst blend.
@@ -122,23 +137,27 @@ def rw3(x):
 
     return f
 
+from functools import partial
+from scipy.integrate import solve_ivp
+dby = np.loadtxt("db.txt", delimiter=",")
+dbx = np.linspace(0, 5, 1000000)
 
 def rw4(x):
     '''
         Stirred tank reactor
     '''
-    x = np.asarray(x) if isinstance(x, list) else x
-    tol = 1.0e-01
-    tspan = [0, 0.78]
-    yo = np.array([0.09, 0.09])
-    u = x  # u should be passed here.
-    options = {'atol': tol, 'rtol': tol}
     
-    Y = odeint(intgrl, yo, np.linspace(tspan[0], tspan[1], 100), hmax=0.01, args=(x,), **options)
-    f = np.sum(np.sum(Y**2, axis=1) + 0.1 * u**2)
+    x = np.asarray(x) if isinstance(x, list) else x
+    tspan = [0, 0.78]
+    yo = [0.09, 0.09]
+    f = partial(intgrl, u=x)
+    #Y = odeint(f, yo, np.linspace(tspan[0], tspan[1], 45), rtol=1e-1)
+    Y = solve_ivp(f,tspan, yo, rtol=0.1, atol=1e-6).y
+    f = np.sum(np.sum(Y**2, axis=0) + 0.1 * x**2)
 
-    return f
+    return np.interp(x, dbx, dby)[0]
 
+@njit
 def rw5(x):
     '''
         Tersoff Si (B)
@@ -191,9 +210,9 @@ def rw5(x):
                 if i == k or j == k:
                     continue
 
-                rd1 = np.linalg.norm(x[i, :] - x[k, :], axis=0)
-                rd3 = np.linalg.norm(x[k, :] - x[j, :], axis=0)
-                rd2 = np.linalg.norm(x[i, :] - x[j, :], axis=0)
+                rd1 = np.linalg.norm(x[i, :] - x[k, :])
+                rd3 = np.linalg.norm(x[k, :] - x[j, :])
+                rd2 = np.linalg.norm(x[i, :] - x[j, :])
                 ctheta_ijk = (rd1**2 + rd2**2 - rd3**3) / (2 * rd1 * rd2)
                 G_th_ijk = 1 + (c**2) / (d**2) - (c**2) / (d**2 + (h - ctheta_ijk)**2)
                 jeta[i, j] += fcr[i, k] * G_th_ijk * np.exp(lemda3**3 * (r[i, j] - r[i, k])**3)
@@ -204,7 +223,7 @@ def rw5(x):
     return np.nansum(E)
 
 
-
+@njit
 def rw6(x):
     '''
         Tersoff potential for Si (C)
@@ -269,6 +288,7 @@ def rw6(x):
     return np.nansum(E)
 
 
+@njit
 def rw7(x):
     '''
         Sprd Spectrum rad Phase
@@ -297,7 +317,9 @@ def rw7(x):
     return np.max(hsum)
 
 
-
+def rw10(x):
+    y, _, _ = antennafunccircular(x, [50, 120], 180, 0.5)
+    return y
 # def rw8(x):
 #     # Define the function for Transmission Network Expansion Planning
 #     sw = np.ceil(x)
